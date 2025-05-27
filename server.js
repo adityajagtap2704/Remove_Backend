@@ -1,130 +1,82 @@
 const express = require('express');
-const http = require('http');
-const socketIo = require('socket.io');
 const cors = require('cors');
 const helmet = require('helmet');
-const compression = require('compression');
-const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 require('dotenv').config();
 
-// Import configurations
-const connectDB = require('./config/database');
-const { initializeSocket } = require('./config/socket');
+const connectDB = require('./src/config/database');
+const socketHandler = require('./src/socket/socketHandler');
 
-// Import middleware
-const errorHandler = require('./middleware/errorHandler');
-
-// Import routes
-const authRoutes = require('./routes/auth');
-const userRoutes = require('./routes/users');
-const driverRoutes = require('./routes/drivers');
-const rideRoutes = require('./routes/rides');
-const locationRoutes = require('./routes/locations');
+// Routes
+const authRoutes = require('./src/routes/auth');
+const userRoutes = require('./src/routes/users');
+const driverRoutes = require('./src/routes/drivers');
+const bookingRoutes = require('./src/routes/bookings');
+const rideRoutes = require('./src/routes/rides');
+const adminRoutes = require('./src/routes/admin');
+const paymentRoutes = require('./src/routes/payments');
 
 const app = express();
-const server = http.createServer(app);
+const PORT = process.env.PORT || 5000;
 
-// Initialize Socket.IO
-const io = socketIo(server, {
-  cors: {
-    origin: process.env.FRONTEND_URL || "http://localhost:3000",
-    methods: ["GET", "POST"],
-    credentials: true
-  },
-  transports: ['websocket', 'polling']
-});
-
-// Connect to database
+// Connect to MongoDB
 connectDB();
-
-// Initialize Socket.IO handlers
-initializeSocket(io);
 
 // Security middleware
 app.use(helmet());
-app.use(compression());
-
-// CORS configuration
 app.use(cors({
-  origin: process.env.FRONTEND_URL || "http://localhost:3000",
+  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
   credentials: true
 }));
 
 // Rate limiting
 const limiter = rateLimit({
-  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100, // limit each IP to 100 requests per windowMs
-  message: 'Too many requests from this IP, please try again later.'
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100 // limit each IP to 100 requests per windowMs
 });
-app.use('/api/', limiter);
+app.use(limiter);
 
-// Body parsing middleware
+// Body parser middleware
 app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
 
-// Logging middleware
-if (process.env.NODE_ENV === 'development') {
-  app.use(morgan('dev'));
-} else {
-  app.use(morgan('combined'));
-}
-
-// Make io accessible to routes
-app.use((req, res, next) => {
-  req.io = io;
-  next();
-});
-
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.status(200).json({
-    status: 'OK',
-    message: 'Cab Booking API is running',
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV
-  });
-});
-
-// API routes
+// Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/drivers', driverRoutes);
+app.use('/api/bookings', bookingRoutes);
 app.use('/api/rides', rideRoutes);
-app.use('/api/locations', locationRoutes);
+app.use('/api/admin', adminRoutes);
+app.use('/api/payments', paymentRoutes);
 
-// 404 handler
-app.use('*', (req, res) => {
-  res.status(404).json({
-    success: false,
-    message: 'Route not found'
-  });
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ status: 'OK', message: 'CabGo Backend is running' });
 });
 
 // Error handling middleware
-app.use(errorHandler);
-
-const PORT = process.env.PORT || 5000;
-
-server.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`🌍 Environment: ${process.env.NODE_ENV}`);
-  console.log(`📡 Socket.IO enabled`);
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({ message: 'Something went wrong!' });
 });
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received. Shutting down gracefully...');
-  server.close(() => {
-    console.log('Process terminated');
-  });
+// 404 handler
+app.use('*', (req, res) => {
+  res.status(404).json({ message: 'Route not found' });
 });
 
-process.on('unhandledRejection', (err) => {
-  console.log('Unhandled Rejection:', err.message);
-  server.close(() => {
-    process.exit(1);
-  });
+const server = app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
+
+// Socket.IO setup
+const io = require('socket.io')(server, {
+  cors: {
+    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+    methods: ['GET', 'POST']
+  }
+});
+
+socketHandler(io);
 
 module.exports = app;
